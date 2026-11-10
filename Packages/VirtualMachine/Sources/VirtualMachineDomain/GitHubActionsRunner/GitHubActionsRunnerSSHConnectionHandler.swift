@@ -6,11 +6,14 @@ import SSHDomain
 private enum GitHubActionsRunnerSSHConnectionHandlerError: LocalizedError {
     case organizationNameUnavailable
     case invalidRunnerURL
+    case runnerWaitTimedOut
 
     var errorDescription: String? {
         switch self {
         case .organizationNameUnavailable:
             return "The organization name is unavailable"
+        case .runnerWaitTimedOut:
+            return "The runner did not receive a job within five minutes"
         case .invalidRunnerURL:
             return "The runner URL is invalid. Ensure the organization name is correct"
         }
@@ -21,31 +24,37 @@ public struct GitHubActionsRunnerSSHConnectionHandler: VirtualMachineSSHConnecti
     private let logger: Logger
     private let client: GitHubClient
     private let credentialsStore: GitHubCredentialsStore
+    private let scheduler: GitHubOrganizationScheduler?
     private let configuration: GitHubActionsRunnerConfiguration
 
     public init(
         logger: Logger,
         client: GitHubClient,
         credentialsStore: GitHubCredentialsStore,
-        configuration: GitHubActionsRunnerConfiguration
+        configuration: GitHubActionsRunnerConfiguration,
+        scheduler: GitHubOrganizationScheduler? = nil
     ) {
         self.logger = logger
         self.client = client
         self.credentialsStore = credentialsStore
         self.configuration = configuration
+        self.scheduler = scheduler
     }
 
     // swiftlint:disable:next function_body_length
     public func didConnect(to virtualMachine: VirtualMachine, through connection: SSHConnection) async throws {
-        let runnerURL = try await getRunnerURL()
-        let appAccessToken = try await client.getAppAccessToken(runnerScope: configuration.runnerScope)
+        let target = try await selectTarget(slot: virtualMachine.name)
+        guard let runnerURL = target.url else {
+            throw GitHubActionsRunnerSSHConnectionHandlerError.invalidRunnerURL
+        }
+        let appAccessToken = try await client.getAppAccessToken(target: target)
         let runnerToken = try await client.getRunnerRegistrationToken(
             with: appAccessToken,
-            runnerScope: configuration.runnerScope
+            target: target
         )
         let runnerDownloadURL = try await client.getRunnerDownloadURL(
             with: appAccessToken,
-            runnerScope: configuration.runnerScope
+            target: target
         )
         let startRunnerScriptFilePath = "~/start-runner.sh"
         try await connection.executeCommand("touch \(startRunnerScriptFilePath)")
@@ -114,7 +123,11 @@ cd \\$ACTIONS_RUNNER_DIRECTORY
 EOF
 """)
         try await connection.executeCommand("chmod +x \(startRunnerScriptFilePath)")
+        try Task.checkCancellation()
         try await connection.executeCommand("open -a Terminal \(startRunnerScriptFilePath)")
+        if isMultiOrganization {
+            try await waitForJob(on: virtualMachine, through: connection, target: target, token: appAccessToken)
+        }
     }
     private func runnerName(for virtualMachine: VirtualMachine) -> String {
         let configuredRunnerName = configuration.runnerName
@@ -137,34 +150,116 @@ EOF
     }
 }
 
-private extension GitHubActionsRunnerSSHConnectionHandler {
-    private func getRunnerURL() async throws -> URL {
+extension GitHubActionsRunnerSSHConnectionHandler {
+    private var isMultiOrganization: Bool {
+        configuration.runnerScope == .organization
+            && GitHubOrganizationNames.parse(credentialsStore.organizationName ?? "").count > 1
+    }
+
+    private func selectTarget(slot: String) async throws -> GitHubRunnerTarget {
         switch configuration.runnerScope {
         case .organization:
-            let organizationName = try await getOrganizationName()
-            guard let runnerURL = URL(string: "https://github.com/" + organizationName) else {
-                logger.info("Invalid runner URL for organization with name \(organizationName)")
-                throw GitHubActionsRunnerSSHConnectionHandlerError.invalidRunnerURL
+            let organizations = GitHubOrganizationNames.parse(credentialsStore.organizationName ?? "")
+            guard let first = organizations.first else {
+                throw GitHubActionsRunnerSSHConnectionHandlerError.organizationNameUnavailable
             }
-            return runnerURL
+            guard organizations.count > 1 else { return .organization(first) }
+            guard let scheduler else {
+                preconditionFailure("Multiple organizations require a shared scheduler")
+            }
+            var labels = Set(configuration.runnerLabels.split(separator: ",").map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }.filter { !$0.isEmpty })
+            if !configuration.runnerDisableDefaultLabels {
+                labels.formUnion(["self-hosted", "macos", "arm64"])
+            }
+            while true {
+                try Task.checkCancellation()
+                if let organization = try await scheduler.nextOrganization(
+                    slot: slot, organizations: organizations, labels: labels
+                ) {
+                    logger.info("Assigned \(slot) to GitHub organization \(organization)")
+                    return .organization(organization)
+                }
+                try await Task.sleep(for: .seconds(5))
+            }
         case .repo:
-            guard
-                let ownerName = credentialsStore.ownerName,
-                let repositoryName = credentialsStore.repositoryName,
-                let runnerURL = URL(string: "https://github.com/\(ownerName)/\(repositoryName)")
-            else {
-                logger.info("Invalid runner URL for repository")
+            guard let owner = credentialsStore.ownerName, let name = credentialsStore.repositoryName else {
                 throw GitHubActionsRunnerSSHConnectionHandlerError.invalidRunnerURL
             }
-            return runnerURL
+            return .repository(owner: owner, name: name)
         }
     }
 
-    private func getOrganizationName() async throws -> String {
-        guard let organizationName = credentialsStore.organizationName else {
-            logger.info("The GitHub organization name is not available")
-            throw GitHubActionsRunnerSSHConnectionHandlerError.organizationNameUnavailable
+    func waitForJob(
+        on virtualMachine: VirtualMachine,
+        through connection: SSHConnection,
+        target: GitHubRunnerTarget,
+        token: GitHubAppAccessToken,
+        timeout: Duration = .seconds(300),
+        pollInterval: Duration = .seconds(5)
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var accessToken = token
+        var refreshTokenAt = ContinuousClock.now.advanced(by: .seconds(1_800))
+        while true {
+            try Task.checkCancellation()
+            let state: Result<RunnerWaitState, Error>
+            do {
+                if ContinuousClock.now >= refreshTokenAt {
+                    accessToken = try await client.getAppAccessToken(target: target)
+                    refreshTokenAt = ContinuousClock.now.advanced(by: .seconds(1_800))
+                }
+                state = .success(try await runnerWaitState(
+                    name: runnerName(for: virtualMachine), target: target, token: accessToken,
+                    hasTimedOut: ContinuousClock.now >= deadline
+                ))
+            } catch {
+                state = .failure(error)
+            }
+            switch state {
+            case .success(.running):
+                await scheduler?.didStartJob(slot: virtualMachine.name)
+                return
+            case .success(.retired):
+                logger.info("Runner in \(virtualMachine.name) timed out waiting for a job")
+                try await connection.executeCommand("sudo shutdown -h now")
+                throw GitHubActionsRunnerSSHConnectionHandlerError.runnerWaitTimedOut
+            case .success(.waiting):
+                break
+            case let .failure(error):
+                try Task.checkCancellation()
+                // An unavailable API cannot prove that the runner is idle. Keep the VM alive.
+                logger.error(
+                    "Could not check or retire runner in \(virtualMachine.name): \(error.localizedDescription)"
+                )
+            }
+            try await Task.sleep(for: pollInterval)
         }
-        return organizationName
+    }
+
+    private enum RunnerWaitState {
+        case waiting
+        case running
+        case retired
+    }
+
+    private func runnerWaitState(
+        name: String, target: GitHubRunnerTarget, token: GitHubAppAccessToken, hasTimedOut: Bool
+    ) async throws -> RunnerWaitState {
+        let runner = try await client.getRunner(with: token, target: target, name: name)
+        if runner?.busy == true { return .running }
+        guard hasTimedOut else { return .waiting }
+        if let runner {
+            do {
+                try await client.removeRunner(with: token, target: target, id: runner.id)
+            } catch {
+                // A job may have been assigned between checking busy and removing the runner.
+                let current = try await client.getRunner(with: token, target: target, name: name)
+                if current?.busy == true { return .running }
+                throw error
+            }
+        }
+        return .retired
     }
 }

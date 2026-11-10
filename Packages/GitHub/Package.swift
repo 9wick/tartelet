@@ -20,6 +20,9 @@ let package = Package(
         .package(url: "https://github.com/Kitura/Swift-JWT", from: "4.0.0")
     ],
     targets: [
+        .testTarget(name: "GitHubDataTests", dependencies: [
+            "GitHubData", .product(name: "NetworkingDomain", package: "Networking")
+        ]),
         .target(name: "GitHubData", dependencies: [
             "GitHubDomain",
             .product(name: "Keychain", package: "Keychain"),

@@ -27,7 +27,7 @@ public enum ConfigurationState {
         } else if githubCredentialsStore.privateKey == nil {
             self = .missingGitHubPrivateKey
         } else if settingsStore.githubRunnerScope == .organization
-                    && (githubCredentialsStore.organizationName ?? "").isEmpty {
+                    && GitHubOrganizationNames.parse(githubCredentialsStore.organizationName ?? "").isEmpty {
             self = .missingGitHubOrganizationName
         } else if settingsStore.githubRunnerScope == .repo
                     && (githubCredentialsStore.ownerName ?? "").isEmpty {

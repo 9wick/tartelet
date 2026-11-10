@@ -35,6 +35,34 @@ Tartelet uses Tart for managing the virtual machines and Tart which in turn uses
 
 After the last step the process starts over.
 
+### Sharing virtual machines across organizations
+
+Enter a comma-separated list such as `org-a,org-b` in **GitHub → Organizations**.
+Install the same GitHub App in each organization, granting organization **Self-hosted
+runners: Read and write** and repository **Actions: Read-only** permissions. Give the
+App access to every repository whose jobs should use these runners. Runner labels
+and group settings apply to all configured organizations; ensure the group exists
+and permits the intended repositories in each organization.
+
+With multiple organizations, Tartelet keeps the configured one or two VMs booted
+without registering runners until matching jobs are queued. It checks GitHub every
+30 seconds and chooses organizations with waiting jobs in round-robin order. A
+shared scheduler reserves capacity before registering each ephemeral runner, so
+two VMs can share an organization when it has enough queued jobs. GitHub chooses
+the individual job; global FIFO ordering is not guaranteed.
+
+After a job finishes, the VM is deleted and recreated as usual. A runner that has
+not received a job after five minutes is removed and its VM is recreated. This
+also handles jobs canceled or taken by another runner after the scheduling check.
+Single-organization and repository configurations keep their existing behavior.
+
+Polling lists repositories, active workflow runs, and jobs using the App's API
+quota. Large installations may need a longer polling interval or a webhook-based
+scheduler. Authentication, permission, and API errors are logged and propagated;
+they are not treated as an empty job queue. After a runner has been launched,
+monitoring errors are logged and retried while keeping the VM alive, because a
+failed API request cannot establish whether a job is running.
+
 ## 🏎 How is the performance?
 
 The performance depends on the hardware that the app is running on. When testing on a Mac mini M1 from 2020 with 16 GB memory, we found that our jobs run 3 - 4 times faster than on GitHub's runners.

@@ -39,21 +39,25 @@ enum Composers {
                     PostBootScriptSSHConnectionHandler(),
                     GitHubActionsRunnerSSHConnectionHandler(
                         logger: logger(subsystem: "GitHubActionsRunnerSSHConnectionHandler"),
-                        client: NetworkingGitHubClient(
-                            credentialsStore: gitHubCredentialsStore,
-                            networkingService: URLSessionNetworkingService(
-                                logger: logger(subsystem: "URLSessionNetworkingService")
-                            )
-                        ),
+                        client: gitHubClient,
                         credentialsStore: gitHubCredentialsStore,
                         configuration: SettingsGitHubActionsRunnerConfiguration(
                             settingsStore: settingsStore
-                        )
+                        ),
+                        scheduler: organizationScheduler
                     )
                 ])
             )
-        )
+        ),
+        didStopMachine: { name in await organizationScheduler.release(slot: name) }
     )
+
+    static let gitHubClient = NetworkingGitHubClient(
+        credentialsStore: gitHubCredentialsStore,
+        networkingService: URLSessionNetworkingService(logger: logger(subsystem: "URLSessionNetworkingService"))
+    )
+
+    static let organizationScheduler = GitHubOrganizationScheduler(client: gitHubClient)
 
     static let editor = VirtualMachineEditor(
         logger: logger(subsystem: "VirtualMachineEditor"),

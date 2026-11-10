@@ -1,13 +1,19 @@
 import Foundation
 
 public protocol GitHubClient {
-    func getAppAccessToken(runnerScope: GitHubRunnerScope) async throws -> GitHubAppAccessToken
+    func getAppAccessToken(target: GitHubRunnerTarget) async throws -> GitHubAppAccessToken
     func getRunnerRegistrationToken(
         with appAccessToken: GitHubAppAccessToken,
-        runnerScope: GitHubRunnerScope
+        target: GitHubRunnerTarget
     ) async throws -> GitHubRunnerRegistrationToken
     func getRunnerDownloadURL(
         with appAccessToken: GitHubAppAccessToken,
-        runnerScope: GitHubRunnerScope
+        target: GitHubRunnerTarget
     ) async throws -> URL
+    func getQueuedJobCount(with token: GitHubAppAccessToken, target: GitHubRunnerTarget,
+                           labels: Set<String>) async throws -> Int
+    func getRunner(with token: GitHubAppAccessToken, target: GitHubRunnerTarget,
+                   name: String) async throws -> GitHubRunnerStatus?
+    func removeRunner(with token: GitHubAppAccessToken, target: GitHubRunnerTarget,
+                      id: Int) async throws
 }

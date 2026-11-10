@@ -102,8 +102,9 @@ struct GitHubSettingsView<SettingsStoreType: SettingsStore & Observable>: View {
 private extension GitHubSettingsView {
     private func openCreateApp() {
         var url = URL(string: "https://github.com")!
-        if !organizationName.isEmpty, case .organization = settingsStore.githubRunnerScope {
-            url.append(path: "/organizations/\(organizationName)")
+        if case .organization = settingsStore.githubRunnerScope,
+           let first = GitHubOrganizationNames.parse(organizationName).first {
+            url.append(path: "/organizations/\(first)")
         }
         url.append(path: "/settings/apps")
         NSWorkspace.shared.open(url)

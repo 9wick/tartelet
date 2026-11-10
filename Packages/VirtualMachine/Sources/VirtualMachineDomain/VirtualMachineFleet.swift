@@ -7,12 +7,18 @@ public final class VirtualMachineFleet {
     public private(set) var isStopping = false
 
     private let logger: Logger
+    private let didStopMachine: (String) async -> Void
     private let baseVirtualMachine: VirtualMachine
     private var activeTasks: [String: Task<(), Never>] = [:]
 
-    public init(logger: Logger, baseVirtualMachine: VirtualMachine) {
+    public init(
+        logger: Logger,
+        baseVirtualMachine: VirtualMachine,
+        didStopMachine: @escaping (String) async -> Void = { _ in }
+    ) {
         self.logger = logger
         self.baseVirtualMachine = baseVirtualMachine
+        self.didStopMachine = didStopMachine
     }
 
     public func start(numberOfMachines: Int) {
@@ -59,6 +65,7 @@ private extension VirtualMachineFleet {
                     // However, the actual error is not important at this point so we ignore it and
                     // let the loop run again, thus giving us another chance to start the virtual machine.
                 }
+                await didStopMachine(name)
             }
             logger.info("Task running virtual machine named \(name) was cancelled.")
             activeTasks.removeValue(forKey: name)

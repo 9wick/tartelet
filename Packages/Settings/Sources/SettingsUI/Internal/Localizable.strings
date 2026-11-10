@@ -25,8 +25,8 @@
 "settings.virtual_machine.start_virtual_machines_on_app_launch" = "Start Virtual Machines on App Launch";
 
 "settings.github" = "GitHub";
-"settings.github.organization_name" = "Organization Name";
-"settings.github.organization_name.prompt" = "Acme Coorporation";
+"settings.github.organization_name" = "Organizations";
+"settings.github.organization_name.prompt" = "org-a,org-b";
 "settings.github.runner_scope" = "Runner Scope";
 "settings.github.owner_name" = "Owner Name";
 "settings.github.owner_name.prompt" = "johnappleseed";
@@ -36,7 +36,7 @@
 "settings.github.private_key" = "Private Key (PEM)";
 "settings.github.private_key.select_file" = "Select File";
 "settings.github.private_key.placeholder" = "Select a private key (PEM)";
-"settings.github.private_key.scopes.organization" = "The private key must have these scopes set:\n✔ Organization: Self-hosted runners (Read and write)";
+"settings.github.private_key.scopes.organization" = "The private key must have these scopes set:\n✔ Organization: Self-hosted runners (Read and write)\n✔ Repository: Actions (Read-only, for multiple organizations)";
 "settings.github.private_key.scopes.repository" = "The private key must have these scopes set:\n✔ Repository: Administration (Read and write)\n✔ Repository: Metadata (Read-only)";
 "settings.github.create_app" = "Create GitHub App";
 

@@ -32,17 +32,17 @@ private enum NetworkingGitHubClientError: LocalizedError {
 }
 
 public final class NetworkingGitHubClient: GitHubClient {
-    private let baseURL = URL(string: "https://api.github.com")!
+    let baseURL = URL(string: "https://api.github.com")!
     private let credentialsStore: GitHubCredentialsStore
-    private let networkingService: NetworkingService
+    let networkingService: NetworkingService
 
     public init(credentialsStore: GitHubCredentialsStore, networkingService: NetworkingService) {
         self.credentialsStore = credentialsStore
         self.networkingService = networkingService
     }
 
-    public func getAppAccessToken(runnerScope: GitHubRunnerScope) async throws -> GitHubAppAccessToken {
-        let appInstallation = try await getAppInstallation(runnerScope: runnerScope)
+    public func getAppAccessToken(target: GitHubRunnerTarget) async throws -> GitHubAppAccessToken {
+        let appInstallation = try await getAppInstallation(target: target)
         let installationID = String(appInstallation.id)
         let appID = String(appInstallation.appId)
         let url = baseURL.appending(path: "/app/installations/\(installationID)/access_tokens")
@@ -62,9 +62,9 @@ public final class NetworkingGitHubClient: GitHubClient {
 
     public func getRunnerDownloadURL(
         with appAccessToken: GitHubAppAccessToken,
-        runnerScope: GitHubRunnerScope
+        target: GitHubRunnerTarget
     ) async throws -> URL {
-        let url = try await baseURL.appending(path: runnerScope.runnerDownloadPath(using: credentialsStore))
+        let url = baseURL.appending(path: target.apiPath + "/actions/runners/downloads")
         let request = URLRequest(url: url).addingBearerToken(appAccessToken.rawValue)
         let downloads = try await networkingService.load([GitHubRunnerDownload].self, from: request).map(\.value)
         let os = "osx"
@@ -77,9 +77,9 @@ public final class NetworkingGitHubClient: GitHubClient {
 
     public func getRunnerRegistrationToken(
       with appAccessToken: GitHubAppAccessToken,
-      runnerScope: GitHubRunnerScope
+      target: GitHubRunnerTarget
     ) async throws -> GitHubRunnerRegistrationToken {
-        let url = try await baseURL.appending(path: runnerScope.runnerRegistrationPath(using: credentialsStore))
+        let url = baseURL.appending(path: target.apiPath + "/actions/runners/registration-token")
         var request = URLRequest(url: url).addingBearerToken(appAccessToken.rawValue)
         request.httpMethod = "POST"
         return try await networkingService.load(
@@ -92,16 +92,19 @@ public final class NetworkingGitHubClient: GitHubClient {
 }
 
 private extension NetworkingGitHubClient {
-    private func getAppInstallation(runnerScope: GitHubRunnerScope) async throws -> GitHubAppInstallation {
+    private func getAppInstallation(target: GitHubRunnerTarget) async throws -> GitHubAppInstallation {
         let url = baseURL.appending(path: "/app/installations")
         let token = try await getAppJWTToken()
         let request = URLRequest(url: url).addingBearerToken(token)
-        let appInstallations = try await networkingService.load(
-            [GitHubAppInstallation].self,
-            from: request
-        ).map(\.value)
-        let loginName = await runnerScope.runnerLogin(using: credentialsStore)
-        guard let appInstallation = appInstallations.first(where: { $0.account.login == loginName }) else {
+        let appInstallations = try await pages(request: request) { (values: [GitHubAppInstallation]) in values }
+        let loginName: String
+        switch target {
+        case let .organization(name): loginName = name
+        case let .repository(owner, _): loginName = owner
+        }
+        guard let appInstallation = appInstallations.first(where: {
+            $0.account.login.caseInsensitiveCompare(loginName) == .orderedSame
+        }) else {
             throw NetworkingGitHubClientError.appIsNotInstalled
         }
         return appInstallation
@@ -123,53 +126,5 @@ private extension URLRequest {
         var mutableRequest = self
         mutableRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return mutableRequest
-    }
-}
-
-private extension GitHubRunnerScope {
-    func runnerRegistrationPath(using credentialsStore: GitHubCredentialsStore) async throws -> String {
-        switch self {
-        case .organization:
-            guard let organizationName = credentialsStore.organizationName else {
-                throw NetworkingGitHubClientError.organizationNameUnavailable
-            }
-            return "/orgs/\(organizationName)/actions/runners/registration-token"
-        case .repo:
-            guard let repositoryName = credentialsStore.repositoryName else {
-                throw NetworkingGitHubClientError.repositoryNameUnavailable
-            }
-            guard let ownerName = credentialsStore.ownerName else {
-                throw NetworkingGitHubClientError.repositoryOwnerNameUnavailable
-            }
-
-            return "/repos/\(ownerName)/\(repositoryName)/actions/runners/registration-token"
-        }
-    }
-
-    func runnerDownloadPath(using credentialsStore: GitHubCredentialsStore) async throws -> String {
-        switch self {
-        case .organization:
-            guard let organizationName = credentialsStore.organizationName else {
-                throw NetworkingGitHubClientError.organizationNameUnavailable
-            }
-            return "/orgs/\(organizationName)/actions/runners/downloads"
-        case .repo:
-            guard let repositoryName = credentialsStore.repositoryName else {
-                throw NetworkingGitHubClientError.repositoryNameUnavailable
-            }
-            guard let ownerName = credentialsStore.ownerName else {
-                throw NetworkingGitHubClientError.repositoryOwnerNameUnavailable
-            }
-            return "/repos/\(ownerName)/\(repositoryName)/actions/runners/downloads"
-        }
-    }
-
-    func runnerLogin(using credentialsStore: GitHubCredentialsStore) async -> String? {
-        switch self {
-        case .organization:
-            return credentialsStore.organizationName
-        case .repo:
-            return credentialsStore.ownerName
-        }
     }
 }
