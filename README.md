@@ -131,11 +131,32 @@ Tags such as `v0.13.0-beta.1` create prereleases. The app's version comes from
 the numeric part of the tag. The workflow must exist in the tagged commit;
 it can release commits on `multi-runner` without merging into `main`.
 
-The workflow uses the repository's `GITHUB_TOKEN` and needs no extra secrets.
-The app is ad-hoc signed and is not notarized. macOS may require **Open Anyway**
-in **System Settings → Privacy & Security** on first launch. The app uses its
-default Keychain access rather than an access group tied to the upstream team.
-Developer ID signing and notarization are not configured.
+The workflow uses Developer ID Application signing and App Store Connect team API
+credentials, matching Mogura's release setup. Set these repository secrets:
+
+- `MACOS_CERTIFICATE_P12_BASE64`: Base64-encoded Developer ID Application certificate
+  and its private key, exported as a password-protected `.p12`.
+- `MACOS_CERTIFICATE_PASSWORD`: Password used to export that `.p12`.
+- `APPLE_API_KEY_P8_BASE64`: Base64-encoded App Store Connect team API private key.
+- `APPLE_API_KEY_ID`: Key ID for that API key.
+- `APPLE_API_ISSUER_ID`: Issuer ID for that API key (not the Apple Team ID).
+
+The same original credentials used for Mogura can be registered here. GitHub
+cannot return existing secret values, so they cannot be copied from another
+repository through the API. Do not commit certificates, API keys, or passwords.
+
+The workflow imports credentials into a temporary Keychain under `.tmp/` and
+removes it after the job. It signs the app with Hardened Runtime and a secure
+timestamp, notarizes and staples the app, then creates, signs, notarizes and
+staples the DMG. Gatekeeper must accept both the app and DMG, including the app
+mounted from the final DMG, before a release is published. Checksums are written
+after stapling. Missing credentials or failed notarization stop the release;
+there is no ad-hoc signing fallback.
+
+The existing `v0.12.0-multi.0` release used ad-hoc signing and was not notarized.
+New notarized builds should use the next version tag rather than replacing a
+published release's assets. The app uses its default Keychain access rather than
+an access group tied to the upstream team.
 
 The workflow uploads assets to a draft before publishing. If a run fails after
 creating the draft, delete that draft before rerunning; existing releases are
@@ -143,7 +164,11 @@ not overwritten. A release requires `vMAJOR.MINOR.PATCH`, optionally followed by
 a prerelease suffix, such as `-beta.1`.
 
 For a local build, install Xcode and XcodeGen, generate the project, and select
-your own development team in Xcode. To package an existing Apple Silicon build:
+your own development team in Xcode. Local packaging also requires `jq` and
+Xcode's `notarytool` and `stapler`. To package an existing Apple Silicon build,
+export `TARTELET_SIGN_IDENTITY`
+(the Developer ID certificate hash), `TARTELET_SIGNING_KEYCHAIN` (the Keychain
+path) and `TARTELET_NOTARY_PROFILE` (the profile stored in that Keychain), then run:
 
 ```bash
 bash scripts/package-dmg.sh /path/to/Tartelet.app v0.13.0 dist
