@@ -164,7 +164,12 @@ mkdir -p "$HOME/\(root)"
 """)
         for (index, organization) in organizations.enumerated() {
             let directory = "\(root)/org-\(index)"
-            try await connection.executeCommand("cp -R \"$HOME/actions-runner\" \"$HOME/\(directory)\"")
+            try await connection.executeCommand("""
+set -e
+cp -RL "$HOME/actions-runner" "$HOME/\(directory)"
+cd "$HOME/\(directory)"
+rm -f .runner .credentials .credentials_rsaparams
+""")
             try await configureRunner(
                 target: .organization(organization), on: virtualMachine, through: connection,
                 directory: directory, startRunner: false

@@ -205,6 +205,66 @@ final class GitHubRunnerWaitTests: XCTestCase {
         XCTAssertFalse(commands.contains { $0.contains("\\\"") })
     }
 
+    func testCopiesAreUnconfiguredAndDoNotModifyLinkedSource() async throws {
+        let client = RunnerClient(statuses: [busy])
+        let connection = Connection()
+        let handler = GitHubActionsRunnerSSHConnectionHandler(
+            logger: SilentLogger(), client: client, credentialsStore: RunnerCredentials(),
+            configuration: Configuration(), scheduler: GitHubOrganizationScheduler(client: client)
+        )
+        try await handler.didConnect(to: Machine(), through: connection)
+        let commands = await connection.commands
+        let copies = commands.filter { $0.contains("cp -R") }
+        XCTAssertEqual(copies.count, 2)
+        let manager = FileManager.default
+        let fixture = URL(fileURLWithPath: manager.currentDirectoryPath)
+            .appendingPathComponent(".tmp/runner-copy-" + UUID().uuidString)
+        try manager.createDirectory(at: fixture, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: fixture) }
+        let source = fixture.appendingPathComponent("shared-sdk")
+        try manager.createDirectory(at: source, withIntermediateDirectories: true)
+        let stateFiles = [".runner", ".credentials", ".credentials_rsaparams"]
+        for name in stateFiles {
+            try Data("original".utf8).write(to: source.appendingPathComponent(name))
+        }
+        try manager.createSymbolicLink(at: fixture.appendingPathComponent("actions-runner"),
+                                       withDestinationURL: source)
+        let config = """
+        cd "$(dirname "$0")"
+        test ! -f .runner || exit 1
+        printf '%s' "$1" > .runner
+        """
+        try Data(config.utf8).write(to: source.appendingPathComponent("config.sh"))
+        let scripts = commands.filter { $0.hasPrefix("cat >") }
+        for (index, copy) in copies.enumerated() {
+            let line = try XCTUnwrap(scripts[index].split(separator: "\n").first {
+                $0.hasPrefix("ACTIONS_RUNNER_DIRECTORY=~/")
+            })
+            let directory = fixture.appendingPathComponent(String(line.dropFirst("ACTIONS_RUNNER_DIRECTORY=~/".count)))
+            try manager.createDirectory(at: directory.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = ["-c", copy.replacingOccurrences(of: "$HOME", with: "$1"), "fixture", fixture.path]
+            try process.run()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+            XCTAssertFalse(try directory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true)
+            for name in stateFiles {
+                XCTAssertFalse(manager.fileExists(atPath: directory.appendingPathComponent(name).path))
+            }
+            let registration = Process()
+            registration.executableURL = URL(fileURLWithPath: "/bin/bash")
+            registration.arguments = [directory.appendingPathComponent("config.sh").path, "org-\(index)"]
+            try registration.run()
+            registration.waitUntilExit()
+            XCTAssertEqual(registration.terminationStatus, 0)
+            XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent(".runner")), "org-\(index)")
+        }
+        for name in stateFiles {
+            XCTAssertEqual(try String(contentsOf: source.appendingPathComponent(name)), "original")
+        }
+    }
+
     func testSingleOrganizationKeepsConfigureAndStartBehavior() async throws {
         let client = RunnerClient(statuses: [])
         let connection = Connection()
