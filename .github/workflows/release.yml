@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-15
+    # Cross-build arm64 on Intel to avoid hosted ARM runner capacity shortages.
+    runs-on: macos-15-intel
     timeout-minutes: 75
     permissions:
       contents: write
