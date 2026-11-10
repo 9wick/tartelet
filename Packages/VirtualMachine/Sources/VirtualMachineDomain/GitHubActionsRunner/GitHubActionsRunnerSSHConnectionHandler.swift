@@ -186,6 +186,7 @@ cat > "$HOME/start-runner.sh" <<'EOF'
 set -e
 trap 'sudo shutdown -h now' EXIT
 cd "$HOME/\(root)/org-\(index)"
+/bin/bash ./env.sh
 ./run.sh
 EOF
 chmod +x "$HOME/start-runner.sh"

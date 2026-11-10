@@ -190,6 +190,7 @@ final class GitHubRunnerWaitTests: XCTestCase {
         let removal = try XCTUnwrap(commands.firstIndex { $0.hasPrefix("rm -rf") })
         XCTAssertTrue(commands[removal].hasSuffix("/org-0\""))
         XCTAssertTrue(scripts[2].contains("/org-1"))
+        XCTAssertTrue(scripts[2].contains("/bin/bash ./env.sh"))
         XCTAssertTrue(scripts[2].contains("./run.sh"))
         XCTAssertFalse(scripts[2].contains("fixture-registration-token"))
         let launch = try XCTUnwrap(commands.firstIndex(of: "open -a Terminal ~/start-runner.sh"))
