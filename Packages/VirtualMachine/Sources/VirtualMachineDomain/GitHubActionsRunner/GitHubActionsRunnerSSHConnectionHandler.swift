@@ -41,9 +41,23 @@ public struct GitHubActionsRunnerSSHConnectionHandler: VirtualMachineSSHConnecti
         self.scheduler = scheduler
     }
 
-    // swiftlint:disable:next function_body_length
     public func didConnect(to virtualMachine: VirtualMachine, through connection: SSHConnection) async throws {
-        let target = try await selectTarget(slot: virtualMachine.name)
+        if isMultiOrganization {
+            try await startMultiOrganizationRunner(on: virtualMachine, through: connection)
+        } else {
+            let target = try await selectTarget(slot: virtualMachine.name)
+            try await configureRunner(target: target, on: virtualMachine, through: connection)
+        }
+    }
+
+    // swiftlint:disable:next function_body_length
+    private func configureRunner(
+        target: GitHubRunnerTarget,
+        on virtualMachine: VirtualMachine,
+        through connection: SSHConnection,
+        directory: String = "actions-runner",
+        startRunner: Bool = true
+    ) async throws {
         guard let runnerURL = target.url else {
             throw GitHubActionsRunnerSSHConnectionHandlerError.invalidRunnerURL
         }
@@ -62,14 +76,14 @@ public struct GitHubActionsRunnerSSHConnectionHandler: VirtualMachineSSHConnecti
 cat > \(startRunnerScriptFilePath) << EOF
 #!/bin/zsh
 ACTIONS_RUNNER_ARCHIVE=./actions-runner.tar.gz
-ACTIONS_RUNNER_DIRECTORY=~/actions-runner
+ACTIONS_RUNNER_DIRECTORY=~/\(directory)
 
 # Ensure the virtual machine is restarted when a job is done.
 set -e pipefail
 function onexit {
   sudo shutdown -h now
 }
-trap onexit EXIT
+\(startRunner ? "trap onexit EXIT" : "")
 
 # Wait until we can connect to GitHub.
 until curl -Is https://github.com &>/dev/null; do :; done
@@ -119,16 +133,69 @@ cd \\$ACTIONS_RUNNER_DIRECTORY
   --token "\(runnerToken.rawValue)"\\\\
   \(configuration.runnerDisableUpdates ? "--disableupdate" : "")\\\\
   \(configuration.runnerDisableDefaultLabels ? "--no-default-labels" : "")
-./run.sh
+\(startRunner ? "./run.sh" : "")
 EOF
 """)
         try await connection.executeCommand("chmod +x \(startRunnerScriptFilePath)")
         try Task.checkCancellation()
-        try await connection.executeCommand("open -a Terminal \(startRunnerScriptFilePath)")
-        if isMultiOrganization {
-            try await waitForJob(on: virtualMachine, through: connection, target: target, token: appAccessToken)
-        }
+        let command = startRunner
+            ? "open -a Terminal \(startRunnerScriptFilePath)"
+            : "/bin/zsh -l \(startRunnerScriptFilePath)"
+        try await connection.executeCommand(command)
     }
+    private func startMultiOrganizationRunner(
+        on virtualMachine: VirtualMachine, through connection: SSHConnection
+    ) async throws {
+        let organizations = GitHubOrganizationNames.parse(credentialsStore.organizationName ?? "")
+        guard let first = organizations.first else {
+            throw GitHubActionsRunnerSSHConnectionHandlerError.organizationNameUnavailable
+        }
+        let token = try await client.getAppAccessToken(target: .organization(first))
+        let download = try await client.getRunnerDownloadURL(with: token, target: .organization(first))
+        let root = ".tartelet/runners-" + UUID().uuidString
+        try await connection.executeCommand("""
+set -e
+if [ ! -d "$HOME/actions-runner" ]; then
+  curl -fL -o "$HOME/actions-runner.tar.gz" "\(download)"
+  mkdir -p "$HOME/actions-runner"
+  tar xzf "$HOME/actions-runner.tar.gz" --directory "$HOME/actions-runner"
+fi
+mkdir -p "$HOME/\(root)"
+""")
+        for (index, organization) in organizations.enumerated() {
+            let directory = "\(root)/org-\(index)"
+            try await connection.executeCommand("cp -R \"$HOME/actions-runner\" \"$HOME/\(directory)\"")
+            try await configureRunner(
+                target: .organization(organization), on: virtualMachine, through: connection,
+                directory: directory, startRunner: false
+            )
+            logger.info("Registered offline runner \(virtualMachine.name) in \(organization)")
+        }
+        let target = try await selectTarget(slot: virtualMachine.name)
+        guard case let .organization(selected) = target,
+              let index = organizations.firstIndex(of: selected) else {
+            throw GitHubActionsRunnerSSHConnectionHandlerError.invalidRunnerURL
+        }
+        // Only the selected organization's credentials may remain when a job starts.
+        for other in organizations.indices where other != index {
+            try await connection.executeCommand("rm -rf \"$HOME/\(root)/org-\(other)\"")
+        }
+        try await connection.executeCommand("""
+cat > "$HOME/start-runner.sh" <<'EOF'
+#!/bin/zsh
+set -e
+trap 'sudo shutdown -h now' EXIT
+cd "$HOME/\(root)/org-\(index)"
+./run.sh
+EOF
+chmod +x "$HOME/start-runner.sh"
+""")
+        try Task.checkCancellation()
+        try await connection.executeCommand("open -a Terminal ~/start-runner.sh")
+        let accessToken = try await client.getAppAccessToken(target: target)
+        try await waitForJob(on: virtualMachine, through: connection, target: target, token: accessToken)
+    }
+
     private func runnerName(for virtualMachine: VirtualMachine) -> String {
         let configuredRunnerName = configuration.runnerName
 

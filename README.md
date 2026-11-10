@@ -44,12 +44,17 @@ App access to every repository whose jobs should use these runners. Runner label
 and group settings apply to all configured organizations; ensure the group exists
 and permits the intended repositories in each organization.
 
-With multiple organizations, Tartelet keeps the configured one or two VMs booted
-without registering runners until matching jobs are queued. It checks GitHub every
-30 seconds and chooses organizations with waiting jobs in round-robin order. A
+With multiple organizations, each VM registers an ephemeral runner in every
+organization at startup. These runners appear **Offline** while waiting; only the
+runner chosen to execute a job is started. Tartelet checks GitHub every 30 seconds
+and chooses organizations with waiting jobs in round-robin order. A
 shared scheduler reserves capacity before registering each ephemeral runner, so
 two VMs can share an organization when it has enough queued jobs. GitHub chooses
 the individual job; global FIFO ordering is not guaranteed.
+
+Before starting a job, the VM deletes the other organizations' local runner
+credentials. Their GitHub entries stay offline and are replaced when the next VM
+starts. Runner names remain stable for each VM slot.
 
 After a job finishes, the VM is deleted and recreated as usual. A runner that has
 not received a job after five minutes is removed and its VM is recreated. This
