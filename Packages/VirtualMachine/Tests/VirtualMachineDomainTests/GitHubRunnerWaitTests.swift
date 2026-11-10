@@ -34,7 +34,13 @@ private actor RunnerClient: GitHubClient {
         if removalFails { throw RunnerError.removalFailed }
     }
     func getAppAccessToken(target: GitHubRunnerTarget) async throws -> GitHubAppAccessToken {
-        GitHubAppAccessToken("fixture-token")
+        if let connection = queueConnection {
+            let commands = await connection.commands
+            if commands.contains(where: { $0.hasPrefix("open -a Terminal") }) {
+                throw RunnerError.lookupFailed
+            }
+        }
+        return GitHubAppAccessToken("fixture-token")
     }
     func getQueuedJobCount(with token: GitHubAppAccessToken, target: GitHubRunnerTarget,
                            labels: Set<String>) async throws -> Int {

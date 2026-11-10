@@ -191,9 +191,9 @@ cd "$HOME/\(root)/org-\(index)"
 EOF
 chmod +x "$HOME/start-runner.sh"
 """)
+        let accessToken = try await client.getAppAccessToken(target: target)
         try Task.checkCancellation()
         try await connection.executeCommand("open -a Terminal ~/start-runner.sh")
-        let accessToken = try await client.getAppAccessToken(target: target)
         try await waitForJob(on: virtualMachine, through: connection, target: target, token: accessToken)
     }
 
