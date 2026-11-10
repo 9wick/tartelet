@@ -110,6 +110,17 @@ jobs:
         if: always()
         run: |
           keychain="$PWD/.tmp/tartelet-signing.keychain-db"
+          if [[ -f .tmp/keychains-before-signing.txt ]]; then
+            keychains=()
+            while IFS= read -r entry; do
+              entry="${entry#*\"}"
+              entry="${entry%\"*}"
+              if [[ -n "$entry" ]]; then
+                keychains+=("$entry")
+              fi
+            done < .tmp/keychains-before-signing.txt
+            security list-keychains -d user -s "${keychains[@]}"
+          fi
           if [[ -f "$keychain" ]]; then
             security delete-keychain "$keychain"
           fi
