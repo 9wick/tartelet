@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-for name in MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD \
+for name in MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_PROVISIONING_PROFILE_BASE64 \
   APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID GITHUB_ENV; do
   if [[ -z "${!name:-}" ]]; then
     echo "Required signing configuration is missing: $name" >&2
@@ -32,6 +32,7 @@ trap cleanup EXIT
 
 printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$credentials_dir/certificate.p12"
 printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$credentials_dir/notary.p8"
+printf '%s' "$MACOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PWD/.tmp/Tartelet.provisionprofile"
 security list-keychains -d user > "$PWD/.tmp/keychains-before-signing.txt"
 keychain_password=$(openssl rand -hex 32)
 security create-keychain -p "$keychain_password" "$keychain"

@@ -137,6 +137,10 @@ credentials, matching Mogura's release setup. Set these repository secrets:
 - `MACOS_CERTIFICATE_P12_BASE64`: Base64-encoded Developer ID Application certificate
   and its private key, exported as a password-protected `.p12`.
 - `MACOS_CERTIFICATE_PASSWORD`: Password used to export that `.p12`.
+- `MACOS_PROVISIONING_PROFILE_BASE64`: Base64-encoded **Developer ID** provisioning
+  profile authorizing this certificate, `dk.shape.Tartelet`, and its Keychain
+  access group. Create/download it in Apple Developer → Certificates, Identifiers
+  & Profiles → Profiles. This is also embedded by the upstream release.
 - `APPLE_API_KEY_P8_BASE64`: Base64-encoded App Store Connect team API private key.
 - `APPLE_API_KEY_ID`: Key ID for that API key.
 - `APPLE_API_ISSUER_ID`: Issuer ID for that API key (not the Apple Team ID).
@@ -144,6 +148,10 @@ credentials, matching Mogura's release setup. Set these repository secrets:
 The same original credentials used for Mogura can be registered here. GitHub
 cannot return existing secret values, so they cannot be copied from another
 repository through the API. Do not commit certificates, API keys, or passwords.
+
+The upstream Keychain storage implementation is retained. The release signs with
+the entitlements from `main`, expands the signing prefix using the provisioning
+profile, and embeds that profile. No upstream team's profile is reused.
 
 The workflow imports credentials into a temporary Keychain under `.tmp/` and
 removes it after the job. It signs the app with Hardened Runtime and a secure

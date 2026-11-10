@@ -83,6 +83,42 @@ done < <(find "$app" -type f -print0)
 while IFS= read -r -d '' path; do
   sign_code "$path"
 done < <(find "$app" -depth -type d \( -name '*.framework' -o -name '*.app' -o -name '*.xpc' \) -print0)
+# Keep main's Keychain entitlements, expanded for this signing team's profile.
+security cms -D -i "$PWD/.tmp/Tartelet.provisionprofile" > "$work_dir/profile.plist"
+python3 - "$work_dir/profile.plist" "$app/Contents/Info.plist" \
+  "Tartelet/Supporting files/Tartelet.entitlements" "$work_dir/entitlements.plist" <<'PYPROFILE'
+import datetime
+import fnmatch
+import hashlib
+import os
+import plistlib
+import sys
+from pathlib import Path
+
+profile, info, entitlements = [plistlib.loads(Path(path).read_bytes()) for path in sys.argv[1:4]]
+allowed = profile["Entitlements"]
+app_id = profile["ApplicationIdentifierPrefix"][0] + "." + info["CFBundleIdentifier"]
+if not fnmatch.fnmatchcase(app_id, allowed["com.apple.application-identifier"]):
+    sys.exit("The provisioning profile does not authorize this app's bundle identifier")
+if profile["ExpirationDate"].replace(tzinfo=datetime.timezone.utc) <= datetime.datetime.now(datetime.timezone.utc):
+    sys.exit("The provisioning profile has expired")
+if not any(hashlib.sha1(cert).hexdigest().upper() == os.environ["TARTELET_SIGN_IDENTITY"].upper()
+           for cert in profile["DeveloperCertificates"]):
+    sys.exit("The provisioning profile does not authorize the signing certificate")
+entitlements["keychain-access-groups"] = [
+    group.replace("$(AppIdentifierPrefix)", profile["ApplicationIdentifierPrefix"][0] + ".")
+    for group in entitlements["keychain-access-groups"]
+]
+if not all(any(fnmatch.fnmatchcase(group, pattern) for pattern in allowed["keychain-access-groups"])
+           for group in entitlements["keychain-access-groups"]):
+    sys.exit("The provisioning profile does not authorize main's Keychain access group")
+entitlements["com.apple.application-identifier"] = app_id
+entitlements["com.apple.developer.team-identifier"] = profile["TeamIdentifier"][0]
+Path(sys.argv[4]).write_bytes(plistlib.dumps(entitlements))
+PYPROFILE
+cp "$PWD/.tmp/Tartelet.provisionprofile" "$app/Contents/embedded.provisionprofile"
+codesign --force --sign "$TARTELET_SIGN_IDENTITY" --keychain "$TARTELET_SIGNING_KEYCHAIN" \
+  --options runtime --timestamp --entitlements "$work_dir/entitlements.plist" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 ditto -c -k --keepParent "$app" "$work_dir/Tartelet.zip"
 notarize "$work_dir/Tartelet.zip" "$app" app
