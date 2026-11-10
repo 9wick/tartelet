@@ -115,11 +115,39 @@ swiftgen
 
 The `swiftgen.yml` file at the root of the repository describes how constants are generated.
 
-### Configuring the project to run on your machine
+### Building and releasing
 
-To run the project locally, it is necessary to edit the `Tartelet.entitlements` file to specify a keychain access group that you control. Then you will need to edit the `Composers.swift` file to ensure the keychain is initialized with the keychain access group specified in the entitlements file. If you do not do this, the app will not be able to persist settings to the keychain.
+Push a version tag on the commit you want to distribute:
 
-In other words, you will need to search for `$(AppIdentifierPrefix)dk.shape.Tartelet` and `566MC7D8D4.dk.shape.Tartelet` in the project and replace the occurrences with references to your keychain access group.
+```bash
+git tag v0.13.0
+git push origin v0.13.0
+```
+
+The `Release` GitHub Actions workflow runs the GitHub and VM package tests,
+builds the Apple Silicon app in Release configuration, and publishes
+`Tartelet-v0.13.0-arm64.dmg` and its SHA-256 checksum to GitHub Releases.
+Tags such as `v0.13.0-beta.1` create prereleases. The app's version comes from
+the numeric part of the tag. The workflow must exist in the tagged commit;
+it can release commits on `multi-runner` without merging into `main`.
+
+The workflow uses the repository's `GITHUB_TOKEN` and needs no extra secrets.
+The app is ad-hoc signed and is not notarized. macOS may require **Open Anyway**
+in **System Settings → Privacy & Security** on first launch. The app uses its
+default Keychain access rather than an access group tied to the upstream team.
+Developer ID signing and notarization are not configured.
+
+The workflow uploads assets to a draft before publishing. If a run fails after
+creating the draft, delete that draft before rerunning; existing releases are
+not overwritten. A release requires `vMAJOR.MINOR.PATCH`, optionally followed by
+a prerelease suffix, such as `-beta.1`.
+
+For a local build, install Xcode and XcodeGen, generate the project, and select
+your own development team in Xcode. To package an existing Apple Silicon build:
+
+```bash
+bash scripts/package-dmg.sh /path/to/Tartelet.app v0.13.0 dist
+```
 
 ### Linting the Codebase with SwiftLint
 

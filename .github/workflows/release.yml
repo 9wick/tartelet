@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v6
+
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo 'Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease' >&2
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          mkdir -p .tmp
+          echo "TMPDIR=$PWD/.tmp" >> "$GITHUB_ENV"
+
+      - name: Run package tests
+        run: |
+          swift test --package-path Packages/GitHub --jobs 2
+          swift test --package-path Packages/VirtualMachine --jobs 2
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build Apple Silicon app
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          xcodebuild \
+            -project Tartelet.xcodeproj \
+            -scheme Tartelet \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$PWD/.tmp/DerivedData" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            CODE_SIGN_ENTITLEMENTS= \
+            DEVELOPMENT_TEAM= \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            build
+          app="$PWD/.tmp/DerivedData/Build/Products/Release/Tartelet.app"
+          actual_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+          test "$actual_version" = "$RELEASE_VERSION"
+
+      - name: Create and verify DMG
+        run: |
+          bash scripts/package-dmg.sh \
+            "$PWD/.tmp/DerivedData/Build/Products/Release/Tartelet.app" \
+            "$RELEASE_TAG" "$PWD/dist"
+
+      - name: Create draft release with assets
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "dist/Tartelet-$RELEASE_TAG-arm64.dmg" \
+            "dist/Tartelet-$RELEASE_TAG-arm64.dmg.sha256" \
+            --verify-tag --draft --generate-notes \
+            --title "Tartelet $RELEASE_TAG"
+
+      - name: Publish release
+        shell: bash
+        run: |
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --latest
+          fi

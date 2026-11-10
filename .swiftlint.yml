@@ -1,4 +1,5 @@
 excluded:
+  - .tmp
   - Packages/MenuBar/Sources/MenuBar/Internal/L10n.swift
   - Packages/Settings/Sources/SettingsDomain/Internal/L10n.swift
   - Packages/Settings/Sources/SettingsUI/Internal/Assets.swift

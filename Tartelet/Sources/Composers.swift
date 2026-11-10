@@ -98,6 +98,6 @@ enum Composers {
 
 private extension Composers {
     private static func keychain(logger: Logger) -> Keychain {
-        Keychain(logger: logger, accessGroup: "566MC7D8D4.dk.shape.Tartelet")
+        Keychain(logger: logger)
     }
 }

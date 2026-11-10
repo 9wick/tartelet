@@ -6,3 +6,6 @@ xcuserdata
 Tartelet.xcodeproj
 build/
 Package.resolved
+
+.tmp/
+/dist/
