@@ -138,7 +138,7 @@ credentials, matching Mogura's release setup. Set these repository secrets:
   and its private key, exported as a password-protected `.p12`.
 - `MACOS_CERTIFICATE_PASSWORD`: Password used to export that `.p12`.
 - `MACOS_PROVISIONING_PROFILE_BASE64`: Base64-encoded **Developer ID** provisioning
-  profile authorizing this certificate, `dk.shape.Tartelet`, and its Keychain
+  profile authorizing this certificate, `com.9wick.Tartelet`, and its Keychain
   access group. Create/download it in Apple Developer → Certificates, Identifiers
   & Profiles → Profiles. This is also embedded by the upstream release.
 - `APPLE_API_KEY_P8_BASE64`: Base64-encoded App Store Connect team API private key.

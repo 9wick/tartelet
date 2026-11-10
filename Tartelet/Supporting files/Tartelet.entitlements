@@ -6,7 +6,7 @@
 	<false/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)dk.shape.Tartelet</string>
+		<string>$(AppIdentifierPrefix)com.9wick.Tartelet</string>
 	</array>
 </dict>
 </plist>
