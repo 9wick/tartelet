@@ -61,7 +61,18 @@ notarize() {
     echo "Notarization did not succeed for $label" >&2
     exit 1
   fi
-  xcrun stapler staple "$target"
+  local staple_result=0
+  xcrun stapler staple "$target" > "$work_dir/staple.log" 2>&1 || staple_result=$?
+  cat "$work_dir/staple.log"
+  if [[ "$staple_result" -ne 0 ]]; then
+    if [[ "$staple_result" -eq 68 ]] && grep -qF 'NSURLErrorDomain Code=-1005' "$work_dir/staple.log"; then
+      echo 'Apple ticket connection was lost; retrying staple once in five seconds' >&2
+      sleep 5
+      xcrun stapler staple "$target"
+    else
+      return "$staple_result"
+    fi
+  fi
   xcrun stapler validate "$target"
 }
 
