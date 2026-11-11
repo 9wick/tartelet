@@ -56,6 +56,7 @@ public struct GitHubActionsRunnerSSHConnectionHandler: VirtualMachineSSHConnecti
         on virtualMachine: VirtualMachine,
         through connection: SSHConnection,
         directory: String = "actions-runner",
+        workDirectory: String = "_work",
         startRunner: Bool = true
     ) async throws {
         guard let runnerURL = target.url else {
@@ -129,7 +130,7 @@ cd \\$ACTIONS_RUNNER_DIRECTORY
   --labels "\(configuration.runnerLabels)"\\\\
   --name "\(runnerName(for: virtualMachine))"\\\\
   --runnergroup "\(configuration.runnerGroup)"\\\\
-  --work "_work"\\\\
+  --work "\(workDirectory)"\\\\
   --token "\(runnerToken.rawValue)"\\\\
   \(configuration.runnerDisableUpdates ? "--disableupdate" : "")\\\\
   \(configuration.runnerDisableDefaultLabels ? "--no-default-labels" : "")
@@ -172,7 +173,7 @@ rm -f .runner .credentials .credentials_rsaparams
 """)
             try await configureRunner(
                 target: .organization(organization), on: virtualMachine, through: connection,
-                directory: directory, startRunner: false
+                directory: directory, workDirectory: "$HOME/actions-runner/_work", startRunner: false
             )
             logger.info("Registered offline runner \(virtualMachine.name) in \(organization)")
         }

@@ -186,6 +186,9 @@ final class GitHubRunnerWaitTests: XCTestCase {
         XCTAssertEqual(scripts.count, 3)
         XCTAssertTrue(scripts[0].contains("https://github.com/a"))
         XCTAssertTrue(scripts[1].contains("https://github.com/b"))
+        for script in scripts.prefix(2) {
+            XCTAssertTrue(script.contains("--work \"$HOME/actions-runner/_work\""))
+        }
         XCTAssertFalse(scripts[0].contains("./run.sh"))
         XCTAssertFalse(scripts[1].contains("./run.sh"))
         XCTAssertFalse(scripts[0].contains("trap onexit EXIT"))
@@ -288,6 +291,7 @@ final class GitHubRunnerWaitTests: XCTestCase {
         let scripts = commands.filter { $0.hasPrefix("cat >") }
         XCTAssertEqual(scripts.count, 1)
         XCTAssertTrue(scripts[0].contains("ACTIONS_RUNNER_DIRECTORY=~/actions-runner"))
+        XCTAssertTrue(scripts[0].contains("--work \"_work\""))
         XCTAssertTrue(scripts[0].contains("./config.sh"))
         XCTAssertTrue(scripts[0].contains("./run.sh"))
         XCTAssertTrue(scripts[0].contains("trap onexit EXIT"))
