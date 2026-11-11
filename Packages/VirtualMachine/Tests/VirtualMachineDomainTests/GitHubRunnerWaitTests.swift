@@ -223,6 +223,14 @@ final class GitHubRunnerWaitTests: XCTestCase {
         defer { try? manager.removeItem(at: fixture) }
         let source = fixture.appendingPathComponent("shared-sdk")
         try manager.createDirectory(at: source, withIntermediateDirectories: true)
+        let npmDirectory = source.appendingPathComponent("_work/_tool/node/24/arm64")
+        let npmTarget = "../lib/node_modules/npm/bin/npm-cli.js"
+        try manager.createDirectory(at: npmDirectory.appendingPathComponent("bin"), withIntermediateDirectories: true)
+        try manager.createDirectory(at: npmDirectory.appendingPathComponent("lib/node_modules/npm/bin"),
+                                    withIntermediateDirectories: true)
+        try Data("npm-cli".utf8).write(to: npmDirectory.appendingPathComponent("bin/" + npmTarget))
+        try manager.createSymbolicLink(atPath: npmDirectory.appendingPathComponent("bin/npm").path,
+                                       withDestinationPath: npmTarget)
         let stateFiles = [".runner", ".credentials", ".credentials_rsaparams"]
         for name in stateFiles {
             try Data("original".utf8).write(to: source.appendingPathComponent(name))
@@ -249,6 +257,9 @@ final class GitHubRunnerWaitTests: XCTestCase {
             process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0)
             XCTAssertFalse(try directory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true)
+            let copiedNpm = directory.appendingPathComponent("_work/_tool/node/24/arm64/bin/npm")
+            XCTAssertEqual(try manager.destinationOfSymbolicLink(atPath: copiedNpm.path), npmTarget)
+            XCTAssertEqual(try String(contentsOf: copiedNpm), "npm-cli")
             for name in stateFiles {
                 XCTAssertFalse(manager.fileExists(atPath: directory.appendingPathComponent(name).path))
             }

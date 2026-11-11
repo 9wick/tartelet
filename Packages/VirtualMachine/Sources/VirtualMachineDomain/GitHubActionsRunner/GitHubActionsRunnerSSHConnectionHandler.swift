@@ -166,7 +166,7 @@ mkdir -p "$HOME/\(root)"
             let directory = "\(root)/org-\(index)"
             try await connection.executeCommand("""
 set -e
-cp -RL "$HOME/actions-runner" "$HOME/\(directory)"
+cp -RH "$HOME/actions-runner" "$HOME/\(directory)"
 cd "$HOME/\(directory)"
 rm -f .runner .credentials .credentials_rsaparams
 """)
