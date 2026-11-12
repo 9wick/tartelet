@@ -49,6 +49,14 @@ enum Composers {
                 ])
             )
         ),
+        inventory: TartVirtualMachineInventory(
+            tart: Tart(
+                homeProvider: SettingsTartHomeProvider(
+                    settingsStore: settingsStore
+                ),
+                shell: ProcessShell()
+            )
+        ),
         didStopMachine: { name in await organizationScheduler.release(slot: name) }
     )
 
