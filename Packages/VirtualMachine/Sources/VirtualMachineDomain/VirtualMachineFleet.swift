@@ -9,15 +9,18 @@ public final class VirtualMachineFleet {
     private let logger: Logger
     private let didStopMachine: (String) async -> Void
     private let baseVirtualMachine: VirtualMachine
+    private let inventory: VirtualMachineInventory
     private var activeTasks: [String: Task<(), Never>] = [:]
 
     public init(
         logger: Logger,
         baseVirtualMachine: VirtualMachine,
+        inventory: VirtualMachineInventory,
         didStopMachine: @escaping (String) async -> Void = { _ in }
     ) {
         self.logger = logger
         self.baseVirtualMachine = baseVirtualMachine
+        self.inventory = inventory
         self.didStopMachine = didStopMachine
     }
 
@@ -54,7 +57,22 @@ private extension VirtualMachineFleet {
         let task = Task {
             while !Task.isCancelled {
                 do {
-                    let virtualMachine = try await baseVirtualMachine.clone(named: name)
+                    let isSlotFree = try await removeLeftoverVirtualMachine(
+                        named: name,
+                        inventory: inventory,
+                        logger: logger
+                    )
+                    guard isSlotFree else {
+                        try await Task.sleep(for: .seconds(60))
+                        continue
+                    }
+                    let virtualMachine: VirtualMachine
+                    do {
+                        virtualMachine = try await baseVirtualMachine.clone(named: name)
+                    } catch {
+                        logger.error("Could not clone virtual machine named \(name): " + error.localizedDescription)
+                        throw error
+                    }
                     try await runVirtualMachine(virtualMachine)
                     if isStopping {
                         activeTasks[name]?.cancel()

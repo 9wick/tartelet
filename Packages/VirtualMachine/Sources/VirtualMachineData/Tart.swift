@@ -1,6 +1,16 @@
 import Foundation
 import ShellDomain
 
+public struct TartLocalVirtualMachine: Decodable {
+    public let name: String
+    public let isRunning: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case name = "Name"
+        case isRunning = "Running"
+    }
+}
+
 public struct Tart {
     private let homeProvider: TartHomeProvider
     private let shell: Shell
@@ -42,6 +52,11 @@ public struct Tart {
     public func list() async throws -> [String] {
         let result = try await executeCommand(withArguments: ["list", "-q", "--source", "local"])
         return result.split(separator: "\n").map(String.init)
+    }
+
+    public func localVirtualMachines() async throws -> [TartLocalVirtualMachine] {
+        let result = try await executeCommand(withArguments: ["list", "--source", "local", "--format", "json"])
+        return try JSONDecoder().decode([TartLocalVirtualMachine].self, from: Data(result.utf8))
     }
 
     public func getIPAddress(ofVirtualMachineNamed name: String) async throws -> String {
