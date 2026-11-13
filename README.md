@@ -209,3 +209,17 @@ The app is named Tartelet because it builds upon [Tart](https://tart.run), a sou
 ---
 
 Tartelet is built with ❤️ by [Shape](https://shape.dk) in Denmark. Oh, and [we are hiring](https://careers.shape.dk) 🤗
+
+### Shared cache lease recovery
+
+Before starting a VM, Tartelet removes a leftover
+`cache/github-actions-cache-server/writer.lock` only when no local VM is running
+in the configured Tart home and no cooperating Tartelet instance has reserved a
+VM startup or run. A host file lock protects this check through the VM's lifetime
+and is released by the OS if Tartelet exits. Cache snapshots and `CURRENT` are
+left untouched; uncommitted data from a terminated VM is not recovered.
+
+All instances sharing this cache must use this recovery protocol. Do not launch
+VMs manually with the same shared cache while Tartelet is starting a VM. A running
+VM found by `tart list` preserves the lease; listing or recovery errors fail the
+startup instead of assuming that the cache is unused.

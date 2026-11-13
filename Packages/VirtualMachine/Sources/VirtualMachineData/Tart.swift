@@ -37,6 +37,12 @@ public struct Tart {
         if !FileManager.default.fileExists(atPath: cacheFolder.path) {
             try FileManager.default.createDirectory(atPath: cacheFolder.path, withIntermediateDirectories: true)
         }
+        let cacheAccess = try SharedCacheAccess(cacheFolder: cacheFolder)
+        defer { withExtendedLifetime(cacheAccess) {} }
+        if cacheAccess.canRecover {
+            let machines = try await localVirtualMachines()
+            try cacheAccess.prepare(hasRunningVirtualMachines: machines.contains { $0.isRunning })
+        }
         var runArgs =  ["run", "--dir=cache:\(cacheFolder.path())"]
         if let tartRunOptions = ProcessInfo.processInfo.environment["TARTELET_RUN_OPTIONS"] {
             runArgs.append(tartRunOptions)
