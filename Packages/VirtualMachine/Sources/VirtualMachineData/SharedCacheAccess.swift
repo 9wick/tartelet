@@ -10,21 +10,22 @@ final class SharedCacheAccess {
     init(cacheFolder: URL) throws {
         self.cacheFolder = cacheFolder
         let lockPath = cacheFolder.appendingPathComponent(".tartelet-access.lock").path
-        descriptor = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else {
+        let openedDescriptor = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard openedDescriptor >= 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
-        if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+        if flock(openedDescriptor, LOCK_EX | LOCK_NB) == 0 {
             canRecover = true
         } else {
             let code = errno
-            guard code == EWOULDBLOCK, flock(descriptor, LOCK_SH | LOCK_NB) == 0 else {
+            guard code == EWOULDBLOCK, flock(openedDescriptor, LOCK_SH | LOCK_NB) == 0 else {
                 let failure = code == EWOULDBLOCK ? errno : code
-                close(descriptor)
+                close(openedDescriptor)
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(failure))
             }
             canRecover = false
         }
+        descriptor = openedDescriptor
     }
 
     deinit {
