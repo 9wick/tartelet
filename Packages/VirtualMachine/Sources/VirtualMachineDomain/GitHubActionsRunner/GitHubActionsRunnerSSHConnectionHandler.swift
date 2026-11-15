@@ -20,31 +20,37 @@ private enum GitHubActionsRunnerSSHConnectionHandlerError: LocalizedError {
     }
 }
 
-public struct GitHubActionsRunnerSSHConnectionHandler: VirtualMachineSSHConnectionHandler {
+public struct GitHubActionsRunnerSSHConnectionHandler: VirtualMachineWorkload {
     private let logger: Logger
     private let client: GitHubClient
     private let credentialsStore: GitHubCredentialsStore
     private let scheduler: GitHubOrganizationScheduler?
     private let configuration: GitHubActionsRunnerConfiguration
+    private let pollInterval: Duration
 
     public init(
         logger: Logger,
         client: GitHubClient,
         credentialsStore: GitHubCredentialsStore,
         configuration: GitHubActionsRunnerConfiguration,
-        scheduler: GitHubOrganizationScheduler? = nil
+        scheduler: GitHubOrganizationScheduler? = nil,
+        pollInterval: Duration = .seconds(5)
     ) {
         self.logger = logger
         self.client = client
         self.credentialsStore = credentialsStore
         self.configuration = configuration
         self.scheduler = scheduler
+        self.pollInterval = pollInterval
     }
 
-    public func didConnect(to virtualMachine: VirtualMachine, through connection: SSHConnection) async throws {
+    public func prepare(
+        on virtualMachine: VirtualMachine, through connection: SSHConnection
+    ) async throws -> PreparedVirtualMachineWorkload {
         if isMultiOrganization {
-            try await startMultiOrganizationRunner(on: virtualMachine, through: connection)
-        } else {
+            return try await prepareMultiOrganizationRunner(on: virtualMachine, through: connection)
+        }
+        return PreparedVirtualMachineWorkload { connection in
             let target = try await selectTarget(slot: virtualMachine.name)
             try await configureRunner(target: target, on: virtualMachine, through: connection)
         }
@@ -144,9 +150,9 @@ EOF
             : "/bin/zsh -l \(startRunnerScriptFilePath)"
         try await connection.executeCommand(command)
     }
-    private func startMultiOrganizationRunner(
+    private func prepareMultiOrganizationRunner(
         on virtualMachine: VirtualMachine, through connection: SSHConnection
-    ) async throws {
+    ) async throws -> PreparedVirtualMachineWorkload {
         let organizations = GitHubOrganizationNames.parse(credentialsStore.organizationName ?? "")
         guard let first = organizations.first else {
             throw GitHubActionsRunnerSSHConnectionHandlerError.organizationNameUnavailable
@@ -177,6 +183,16 @@ rm -f .runner .credentials .credentials_rsaparams
             )
             logger.info("Registered offline runner \(virtualMachine.name) in \(organization)")
         }
+        return PreparedVirtualMachineWorkload { connection in
+            try await runMultiOrganizationRunner(
+                on: virtualMachine, through: connection, organizations: organizations, root: root
+            )
+        }
+    }
+
+    private func runMultiOrganizationRunner(
+        on virtualMachine: VirtualMachine, through connection: SSHConnection, organizations: [String], root: String
+    ) async throws {
         let target = try await selectTarget(slot: virtualMachine.name)
         guard case let .organization(selected) = target,
               let index = organizations.firstIndex(of: selected) else {
@@ -197,7 +213,7 @@ cd "$HOME/\(root)/org-\(index)"
 EOF
 chmod +x "$HOME/start-runner.sh"
 """)
-        let accessToken = try await client.getAppAccessToken(target: target)
+        let accessToken = try await waitForAccessToken(target: target, slot: virtualMachine.name)
         try Task.checkCancellation()
         try await connection.executeCommand("open -a Terminal ~/start-runner.sh")
         try await waitForJob(on: virtualMachine, through: connection, target: target, token: accessToken)
@@ -249,19 +265,51 @@ extension GitHubActionsRunnerSSHConnectionHandler {
             }
             while true {
                 try Task.checkCancellation()
-                if let organization = try await scheduler.nextOrganization(
-                    slot: slot, organizations: organizations, labels: labels
-                ) {
+                let selection: Result<String?, Error>
+                do {
+                    selection = .success(try await scheduler.nextOrganization(
+                        slot: slot, organizations: organizations, labels: labels
+                    ))
+                } catch {
+                    selection = .failure(error)
+                }
+                switch selection {
+                case let .success(organization?):
                     logger.info("Assigned \(slot) to GitHub organization \(organization)")
                     return .organization(organization)
+                case .success(nil):
+                    break
+                case let .failure(error):
+                    try Task.checkCancellation()
+                    logger.error("Job queue check for \(slot) failed; keeping VM ready: \(error.localizedDescription)")
                 }
-                try await Task.sleep(for: .seconds(5))
+                try await Task.sleep(for: pollInterval)
             }
         case .repo:
             guard let owner = credentialsStore.ownerName, let name = credentialsStore.repositoryName else {
                 throw GitHubActionsRunnerSSHConnectionHandlerError.invalidRunnerURL
             }
             return .repository(owner: owner, name: name)
+        }
+    }
+
+    private func waitForAccessToken(target: GitHubRunnerTarget, slot: String) async throws -> GitHubAppAccessToken {
+        while true {
+            try Task.checkCancellation()
+            let result: Result<GitHubAppAccessToken, Error>
+            do {
+                result = .success(try await client.getAppAccessToken(target: target))
+            } catch {
+                result = .failure(error)
+            }
+            switch result {
+            case let .success(token):
+                return token
+            case let .failure(error):
+                try Task.checkCancellation()
+                logger.error("Runner authentication for \(slot) failed; keeping VM ready: \(error.localizedDescription)")
+            }
+            try await Task.sleep(for: pollInterval)
         }
     }
 

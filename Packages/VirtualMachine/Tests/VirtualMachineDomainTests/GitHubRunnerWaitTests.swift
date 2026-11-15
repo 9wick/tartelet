@@ -14,6 +14,11 @@ private actor RunnerClient: GitHubClient {
     var lookupFailures: Int
     private(set) var removals = 0
     var queueConnection: Connection?
+    var tokenFailures = 0
+    var queueFailures = 0
+    var failLaunchToken = false
+    private(set) var tokenFailureCount = 0
+    private(set) var queueFailureCount = 0
 
     init(statuses: [GitHubRunnerStatus?], removalFails: Bool = false, lookupFailures: Int = 0, hasJobs: Bool = true) {
         self.statuses = statuses
@@ -33,7 +38,16 @@ private actor RunnerClient: GitHubClient {
         removals += 1
         if removalFails { throw RunnerError.removalFailed }
     }
+    func failNextRequests(tokens: Int = 0, queues: Int = 0) {
+        tokenFailures = tokens
+        queueFailures = queues
+    }
     func getAppAccessToken(target: GitHubRunnerTarget) async throws -> GitHubAppAccessToken {
+        if tokenFailures > 0 {
+            tokenFailures -= 1
+            tokenFailureCount += 1
+            throw URLError(.networkConnectionLost)
+        }
         if let connection = queueConnection {
             let commands = await connection.commands
             if commands.contains(where: { $0.hasPrefix("open -a Terminal") }) {
@@ -44,10 +58,20 @@ private actor RunnerClient: GitHubClient {
     }
     func getQueuedJobCount(with token: GitHubAppAccessToken, target: GitHubRunnerTarget,
                            labels: Set<String>) async throws -> Int {
+        if queueFailures > 0 {
+            queueFailures -= 1
+            queueFailureCount += 1
+            throw URLError(.networkConnectionLost)
+        }
         try await queueConnection?.executeCommand("# queue checked")
+        if failLaunchToken && target == .organization("b") {
+            tokenFailures = 1
+            failLaunchToken = false
+        }
         return hasJobs && target == .organization("b") ? 1 : 0
     }
     func observeQueue(through connection: Connection) { queueConnection = connection }
+    func failTokenBeforeLaunch() { failLaunchToken = true }
     func getRunnerRegistrationToken(with token: GitHubAppAccessToken,
                                     target: GitHubRunnerTarget) async throws -> GitHubRunnerRegistrationToken {
         GitHubRunnerRegistrationToken("fixture-registration-token")
@@ -180,7 +204,8 @@ final class GitHubRunnerWaitTests: XCTestCase {
             logger: SilentLogger(), client: client, credentialsStore: RunnerCredentials(),
             configuration: Configuration(), scheduler: GitHubOrganizationScheduler(client: client)
         )
-        try await handler.didConnect(to: Machine(), through: connection)
+        let prepared = try await handler.prepare(on: Machine(), through: connection)
+        try await prepared.run(through: connection)
         let commands = await connection.commands
         let scripts = commands.filter { $0.hasPrefix("cat >") }
         XCTAssertEqual(scripts.count, 3)
@@ -215,7 +240,8 @@ final class GitHubRunnerWaitTests: XCTestCase {
             logger: SilentLogger(), client: client, credentialsStore: RunnerCredentials(),
             configuration: Configuration(), scheduler: GitHubOrganizationScheduler(client: client)
         )
-        try await handler.didConnect(to: Machine(), through: connection)
+        let prepared = try await handler.prepare(on: Machine(), through: connection)
+        try await prepared.run(through: connection)
         let commands = await connection.commands
         let copies = commands.filter { $0.contains("cp -R") }
         XCTAssertEqual(copies.count, 2)
@@ -286,7 +312,8 @@ final class GitHubRunnerWaitTests: XCTestCase {
             logger: SilentLogger(), client: client,
             credentialsStore: RunnerCredentials(organizations: "a"), configuration: Configuration()
         )
-        try await handler.didConnect(to: Machine(), through: connection)
+        let prepared = try await handler.prepare(on: Machine(), through: connection)
+        try await prepared.run(through: connection)
         let commands = await connection.commands
         let scripts = commands.filter { $0.hasPrefix("cat >") }
         XCTAssertEqual(scripts.count, 1)
@@ -307,7 +334,11 @@ final class GitHubRunnerWaitTests: XCTestCase {
             logger: SilentLogger(), client: client, credentialsStore: RunnerCredentials(),
             configuration: Configuration(), scheduler: GitHubOrganizationScheduler(client: client)
         )
-        let task = Task { try await handler.didConnect(to: Machine(), through: connection) }
+        let prepared = try await handler.prepare(on: Machine(), through: connection)
+        let beforeWaiting = await connection.commands
+        XCTAssertFalse(beforeWaiting.contains("# queue checked"))
+        XCTAssertFalse(beforeWaiting.contains { $0.hasPrefix("open -a Terminal") })
+        let task = Task { try await prepared.run(through: connection) }
         await connection.waitForQueueCheck()
         let commands = await connection.commands
         XCTAssertEqual(commands.filter { $0 == "/bin/zsh -l ~/start-runner.sh" }.count, 2)
@@ -317,6 +348,46 @@ final class GitHubRunnerWaitTests: XCTestCase {
             try await task.value
             XCTFail("Expected cancellation of the idle VM")
         } catch is CancellationError { }
+    }
+
+    func testQueueAPIFailuresRetryWithoutRepeatingPreparationOrStoppingVM() async throws {
+        let client = RunnerClient(statuses: [busy])
+        let connection = Connection()
+        let handler = GitHubActionsRunnerSSHConnectionHandler(
+            logger: SilentLogger(), client: client, credentialsStore: RunnerCredentials(),
+            configuration: Configuration(), scheduler: GitHubOrganizationScheduler(client: client), pollInterval: .zero
+        )
+        let prepared = try await handler.prepare(on: Machine(), through: connection)
+        let initial = await connection.commands
+        XCTAssertEqual(initial.filter { $0 == "/bin/zsh -l ~/start-runner.sh" }.count, 2)
+        await client.failNextRequests(tokens: 1, queues: 1)
+        try await prepared.run(through: connection)
+        let commands = await connection.commands
+        XCTAssertEqual(commands.filter { $0 == "/bin/zsh -l ~/start-runner.sh" }.count, 2)
+        XCTAssertEqual(commands.filter { $0.hasPrefix("open -a Terminal") }.count, 1)
+        XCTAssertFalse(commands.contains("sudo shutdown -h now"))
+        let tokenFailures = await client.tokenFailureCount
+        let queueFailures = await client.queueFailureCount
+        XCTAssertEqual(tokenFailures, 1)
+        XCTAssertEqual(queueFailures, 1)
+    }
+
+    func testPostSelectionAuthenticationFailureDoesNotReprepareOrLoseSelectedRunner() async throws {
+        let client = RunnerClient(statuses: [busy])
+        let connection = Connection()
+        let handler = GitHubActionsRunnerSSHConnectionHandler(
+            logger: SilentLogger(), client: client, credentialsStore: RunnerCredentials(),
+            configuration: Configuration(), scheduler: GitHubOrganizationScheduler(client: client), pollInterval: .zero
+        )
+        let prepared = try await handler.prepare(on: Machine(), through: connection)
+        await client.failTokenBeforeLaunch()
+        try await prepared.run(through: connection)
+        let commands = await connection.commands
+        XCTAssertEqual(commands.filter { $0 == "/bin/zsh -l ~/start-runner.sh" }.count, 2)
+        XCTAssertEqual(commands.filter { $0.hasPrefix("open -a Terminal") }.count, 1)
+        XCTAssertFalse(commands.contains("sudo shutdown -h now"))
+        let failures = await client.tokenFailureCount
+        XCTAssertEqual(failures, 1)
     }
 
 }

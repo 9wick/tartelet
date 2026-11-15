@@ -63,8 +63,9 @@ Single-organization and repository configurations keep their existing behavior.
 
 Polling lists repositories, active workflow runs, and jobs using the App's API
 quota. Large installations may need a longer polling interval or a webhook-based
-scheduler. Authentication, permission, and API errors are logged and propagated;
-they are not treated as an empty job queue. After a runner has been launched,
+scheduler. VM startup and runner preparation finish before job waiting begins. Queue
+authentication and API errors are logged and retried on the same prepared VM;
+they are not treated as an empty job queue or an SSH startup failure. After a runner has been launched,
 monitoring errors are logged and retried while keeping the VM alive, because a
 failed API request cannot establish whether a job is running.
 

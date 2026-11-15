@@ -35,18 +35,14 @@ enum Composers {
                 ),
                 ipAddressReader: RetryingVirtualMachineIPAddressReader(),
                 credentialsStore: virtualMachineSSHCredentialsStore,
-                connectionHandler: CompositeVirtualMachineSSHConnectionHandler([
-                    PostBootScriptSSHConnectionHandler(),
-                    GitHubActionsRunnerSSHConnectionHandler(
-                        logger: logger(subsystem: "GitHubActionsRunnerSSHConnectionHandler"),
-                        client: gitHubClient,
-                        credentialsStore: gitHubCredentialsStore,
-                        configuration: SettingsGitHubActionsRunnerConfiguration(
-                            settingsStore: settingsStore
-                        ),
-                        scheduler: organizationScheduler
-                    )
-                ])
+                connectionHandler: PostBootScriptSSHConnectionHandler()
+            ),
+            workload: GitHubActionsRunnerSSHConnectionHandler(
+                logger: logger(subsystem: "GitHubActionsRunnerSSHConnectionHandler"),
+                client: gitHubClient,
+                credentialsStore: gitHubCredentialsStore,
+                configuration: SettingsGitHubActionsRunnerConfiguration(settingsStore: settingsStore),
+                scheduler: organizationScheduler
             )
         ),
         inventory: TartVirtualMachineInventory(

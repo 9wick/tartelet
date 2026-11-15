@@ -10,6 +10,8 @@ private enum StartVirtualMachineValue {
 private enum StartVirtualMachineError: LocalizedError, CustomDebugStringConvertible {
     case failedStartingVirtualMachine(Error)
     case failedEstablishingSSHConnection(Error)
+    case failedPreparingWorkload(Error)
+    case failedRunningWorkload(Error)
     case cancelled
 
     var errorDescription: String? {
@@ -22,6 +24,10 @@ private enum StartVirtualMachineError: LocalizedError, CustomDebugStringConverti
             "Failed starting virtual machine"
         case .failedEstablishingSSHConnection:
             "Failed establishing SSH connection"
+        case .failedPreparingWorkload:
+            "Failed preparing virtual machine workload"
+        case .failedRunningWorkload:
+            "Failed running virtual machine workload"
         case .cancelled:
             "Task was cancelled"
         }
@@ -41,15 +47,18 @@ public final class SSHConnectingVirtualMachine<SSHClientType: SSHClient>: Virtua
     private let logger: Logger
     private let virtualMachine: VirtualMachine
     private let sshClient: VirtualMachineSSHClient<SSHClientType>
+    private let workload: VirtualMachineWorkload?
 
     public init(
         logger: Logger,
         virtualMachine: VirtualMachine,
-        sshClient: VirtualMachineSSHClient<SSHClientType>
+        sshClient: VirtualMachineSSHClient<SSHClientType>,
+        workload: VirtualMachineWorkload? = nil
     ) {
         self.logger = logger
         self.virtualMachine = virtualMachine
         self.sshClient = sshClient
+        self.workload = workload
     }
 
     public func start() async throws {
@@ -74,10 +83,10 @@ public final class SSHConnectingVirtualMachine<SSHClientType: SSHClient>: Virtua
                     }
                 case let .failure(error):
                     switch error {
-                    case .failedStartingVirtualMachine, .failedEstablishingSSHConnection:
-                        // If we fail to start the virtual machine or establish the SSH connection,
-                        // then we'll cancel the other operations. This ensures the virtual machine is
-                        // shut down and enables the VirtualMachineFleet to start a new virtual machine.
+                    case .failedStartingVirtualMachine, .failedEstablishingSSHConnection,
+                         .failedPreparingWorkload, .failedRunningWorkload:
+                        // Only terminal phase failures reach here. Recoverable job-waiting errors
+                        // are handled by the workload without cancelling the running VM.
                         group.cancelAll()
                         throw error
                     case .cancelled:
@@ -94,7 +103,8 @@ public final class SSHConnectingVirtualMachine<SSHClientType: SSHClient>: Virtua
         return SSHConnectingVirtualMachine(
             logger: logger,
             virtualMachine: virtualMachine,
-            sshClient: sshClient
+            sshClient: sshClient,
+            workload: workload
         )
     }
 
@@ -122,20 +132,54 @@ private extension SSHConnectingVirtualMachine {
     }
 
     private func connect(to virtualMachine: VirtualMachine) async throws -> StartVirtualMachineResult {
+        let connection: SSHClientType.SSHConnectionType
         do {
-            let connection = try await sshClient.connect(to: virtualMachine)
+            connection = try await sshClient.connect(to: virtualMachine)
+        } catch {
+            if error is CancellationError {
+                return .failure(.cancelled)
+            }
+            logger.error(error.localizedDescription)
+            logger.error("Could not connect to the virtual machine over SSH, so the virtual machine will be shut down.")
+            return .failure(.failedEstablishingSSHConnection(error))
+        }
+        let result = await prepareAndRunWorkload(on: virtualMachine, through: connection)
+        do {
             try await connection.close()
+        } catch {
+            // Closing the control connection must not interrupt a runner that has already started.
+            logger.error("Could not close SSH connection to \(virtualMachine.name): \(error.localizedDescription)")
+        }
+        return result
+    }
+
+    private func prepareAndRunWorkload(
+        on virtualMachine: VirtualMachine, through connection: SSHConnection
+    ) async -> StartVirtualMachineResult {
+        guard let workload else {
+            return .success(.sshConnectionCompleted)
+        }
+        let prepared: PreparedVirtualMachineWorkload
+        do {
+            prepared = try await workload.prepare(on: virtualMachine, through: connection)
+        } catch {
+            if error is CancellationError {
+                return .failure(.cancelled)
+            }
+            logger.error("Could not prepare workload in \(virtualMachine.name): \(error.localizedDescription)")
+            return .failure(.failedPreparingWorkload(error))
+        }
+        logger.info("Virtual machine \(virtualMachine.name) is ready; starting workload phase")
+        do {
+            try Task.checkCancellation()
+            try await prepared.run(through: connection)
             return .success(.sshConnectionCompleted)
         } catch {
             if error is CancellationError {
                 return .failure(.cancelled)
-            } else {
-                logger.error(error.localizedDescription)
-                logger.error(
-                    "Could not connect to the virtual machine over SSH, so the virtual machine will be shut down."
-                )
-                return .failure(.failedEstablishingSSHConnection(error))
             }
+            logger.error("Workload in \(virtualMachine.name) failed: \(error.localizedDescription)")
+            return .failure(.failedRunningWorkload(error))
         }
     }
 }
